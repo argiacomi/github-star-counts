@@ -85,11 +85,11 @@ async function fetchRepositoriesWithPagination(url, settings) {
         const links = linkHeader.split(',');
 
         for (const link of links) {
-          const url = new URL(link.trim().split(';')[0].slice(1, -1));
+          const newUrl = new URL(link.trim().split(';')[0].slice(1, -1));
           const rel = link.trim().split(';')[1].trim();
 
           if (rel === 'rel="next"') {
-            nextPageUrl = url.href;
+            nextPageUrl = newUrl.href;
             break;
           }
         }
@@ -142,7 +142,7 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
 
         data = await response.json();
 
-        if (data.total_count == 0 || data.total_count <= MAX_RESULTS_PER_SEARCH) {
+        if (data.total_count === 0 || data.total_count <= MAX_RESULTS_PER_SEARCH) {
           console.info(`3: Optimal Star Range set at ${starCountParsedRange}`);
           break;
         }
@@ -157,7 +157,7 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
       }
 
       // Fetch all repositories with the given star count range.
-      if (data.total_count != 0) {
+      if (data.total_count !== 0) {
         const queryParams = new URLSearchParams({
           q: `stars:${starCountParsedRange}`,
           per_page: PER_PAGE.toString(),
@@ -179,7 +179,7 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
 
     return repoData;
   } catch (error) {
-    console.error('Error fetching data:', err.message);
+    console.error('Error fetching data:', error.message);
     process.exitCode = 1;
   }
 }
