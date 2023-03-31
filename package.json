@@ -11,7 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.12.1",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "ra-core": "^4.9.0"
   },
   "devDependencies": {
     "eslint": "^8.36.0",

@@ -5,9 +5,10 @@ const { SUPABASE_URL, SUPABASE_ANON_KEY, GITHUB_TOKEN } = process.env;
 
 const MAX_RESULTS_PER_SEARCH = 1000;
 const PER_PAGE = 100;
-const INITIAL_STAR_RANGE = 1000;
-const STAR_RANGE_DECREMENT = 100;
-const STAR_MAX = 6000;
+const STAR_COUNT_START = 3500;
+const INITIAL_STAR_RANGE = 3000;
+const STAR_RANGE_DECREMENT = 300;
+const STAR_MAX = 500000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -19,6 +20,7 @@ const fetchSettings = {
   },
 };
 
+// Fetch the rate limit from the GitHub API.
 async function fetchRateLimit() {
   const baseUrl = 'https://api.github.com';
   const rateLimitUrl = `${baseUrl}/rate_limit`;
@@ -29,6 +31,7 @@ async function fetchRateLimit() {
   return rateLimitJson.resources.search;
 }
 
+// Filter the response data and map it to the desired format.
 function filterResponseData(responseJson) {
   const filteredRepos = responseJson.items.filter(
     ({ archived, disabled, visibility }) => !archived && !disabled && visibility === 'public',
@@ -63,6 +66,7 @@ function filterResponseData(responseJson) {
   );
 }
 
+// Fetch repositories with pagination from the GitHub API.
 async function fetchRepositoriesWithPagination(url, settings) {
   try {
     let nextPageUrl = url;
@@ -94,12 +98,12 @@ async function fetchRepositoriesWithPagination(url, settings) {
 
     return repoData;
   } catch (error) {
-    console.error('Error paginating requests:', err.message);
+    console.error('Error paginating requests:', error.message);
     process.exitCode = 1;
   }
 }
 
-async function fetchAllRepos(starCountStart = 5000) {
+async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
   const baseUrl = 'https://api.github.com';
   const searchUrl = `${baseUrl}/search/repositories`;
   const repoData = [];
@@ -107,13 +111,24 @@ async function fetchAllRepos(starCountStart = 5000) {
   let starCutoff = starCountStart;
 
   try {
-    const { limit, remaining, reset } = await fetchRateLimit();
-    console.info(`API rate limit: ${remaining} remaining of ${limit} until ${new Date(reset * 1000)}`);
     while (true) {
       let starCountRange = INITIAL_STAR_RANGE;
-      let starCountParsedRange = `${starCutoff}..${Math.min(STAR_MAX, starCutoff + starCountRange - 1)}`;
+      let starCountParsedRange = `${starCutoff}..${Math.max(
+        Math.min(STAR_MAX, starCutoff + starCountRange - 1),
+        starCutoff,
+      )}`;
       let data = {};
 
+      const { limit, remaining, reset } = await fetchRateLimit();
+      console.info(`API rate limit: ${remaining} remaining of ${limit} until ${new Date(reset * 1000)}`);
+
+      if (remaining < 12) {
+        while (Date.now() < new Date(reset * 1000)) {
+          console.log('Waiting for rate limit reset');
+        }
+      }
+
+      // Determine the optimal star range given 1000 returned results limit.
       console.info('1: Searching for optimal Star Range');
 
       while (data.total_count > MAX_RESULTS_PER_SEARCH || data.total_count === undefined) {
@@ -127,26 +142,33 @@ async function fetchAllRepos(starCountStart = 5000) {
 
         data = await response.json();
 
-        if (data.total_count <= MAX_RESULTS_PER_SEARCH) {
+        if (data.total_count == 0 || data.total_count <= MAX_RESULTS_PER_SEARCH) {
+          console.info(`3: Optimal Star Range set at ${starCountParsedRange}`);
           break;
         }
 
         starCountRange -= STAR_RANGE_DECREMENT;
-        starCountParsedRange = `${starCutoff}..${Math.min(STAR_MAX, starCutoff + starCountRange - 1)}`;
+        starCountParsedRange = `${starCutoff}..${Math.max(
+          Math.min(STAR_MAX, starCutoff + starCountRange - 1),
+          starCutoff,
+        )}`;
+
+        if (starCutoff === Math.max(Math.min(STAR_MAX, starCutoff + starCountRange - 1), starCutoff)) break;
       }
 
-      console.info(`3: Optimal Star Range set at ${starCountParsedRange}`);
+      // Fetch all repositories with the given star count range.
+      if (data.total_count != 0) {
+        const queryParams = new URLSearchParams({
+          q: `stars:${starCountParsedRange}`,
+          per_page: PER_PAGE.toString(),
+        });
 
-      const queryParams = new URLSearchParams({
-        q: `stars:${starCountParsedRange}`,
-        per_page: PER_PAGE.toString(),
-      });
+        const nextPageUrl = `${searchUrl}?${queryParams.toString()}`;
+        const fetchedRepos = await fetchRepositoriesWithPagination(nextPageUrl, fetchSettings);
 
-      const nextPageUrl = `${searchUrl}?${queryParams.toString()}`;
-      const fetchedRepos = await fetchRepositoriesWithPagination(nextPageUrl, fetchSettings);
-
-      repoData.push(...fetchedRepos);
-      console.info(`4: Adding ${fetchedRepos.length} repositories. Total stored: ${repoData.length}`);
+        repoData.push(...fetchedRepos);
+        console.info(`4: Adding ${fetchedRepos.length} repositories. Total stored: ${repoData.length}`);
+      }
 
       starCutoff += starCountRange;
 
@@ -166,6 +188,7 @@ const main = async () => {
   try {
     const repoData = await fetchAllRepos();
 
+    // Upsert fetched repositories into the Supabase 'repositories' table.
     try {
       const response = await supabase
         .from('repositories')
