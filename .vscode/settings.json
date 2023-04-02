@@ -1,0 +1,14 @@
+{
+  "sqltools.connections": [
+    {
+      "previewLimit": 1000,
+      "server": "db.tzjlpsbxkiorhjivnjgg.supabase.co",
+      "port": 5432,
+      "driver": "PostgreSQL",
+      "name": "GitHub Repos DB",
+      "password": "2futiHd6Ym7HG6n",
+      "database": "postgres",
+      "username": "postgres"
+    }
+  ]
+}

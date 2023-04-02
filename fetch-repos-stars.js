@@ -5,10 +5,10 @@ const { SUPABASE_URL, SUPABASE_ANON_KEY, GITHUB_TOKEN } = process.env;
 
 const MAX_RESULTS_PER_SEARCH = 1000;
 const PER_PAGE = 100;
-const STAR_COUNT_START = 3500;
+const STAR_MIN = 3499;
 const INITIAL_STAR_RANGE = 3000;
 const STAR_RANGE_DECREMENT = 300;
-const STAR_MAX = 500000;
+const STAR_MAX = 364000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -20,7 +20,7 @@ const fetchSettings = {
   },
 };
 
-// Fetch the rate limit from the GitHub API.
+// Fetch the rate limit from the GitHub API and wait for reset when necessary.
 async function fetchRateLimit() {
   const baseUrl = 'https://api.github.com';
   const rateLimitUrl = `${baseUrl}/rate_limit`;
@@ -29,6 +29,22 @@ async function fetchRateLimit() {
   const rateLimitJson = await rateLimit.json();
 
   return rateLimitJson.resources.search;
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRateLimitReset(option) {
+  const { limit, remaining, reset } = await fetchRateLimit();
+  console.info(`API rate limit: ${remaining} remaining of ${limit} until ${new Date(reset * 1000)}`);
+
+  if ((remaining < 12 && option === 1) || (remaining === 0 && option === 2)) {
+    const waitTime = (new Date(reset * 1000) - Date.now()) / 1000;
+    console.log(`Waiting ${waitTime} seconds for rate limit reset`);
+    await sleep(waitTime * 1000);
+    console.log(`Rate limit reset complete`);
+  }
 }
 
 // Filter the response data and map it to the desired format.
@@ -103,7 +119,7 @@ async function fetchRepositoriesWithPagination(url, settings) {
   }
 }
 
-async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
+async function fetchAllRepos(starCountStart = STAR_MIN) {
   const baseUrl = 'https://api.github.com';
   const searchUrl = `${baseUrl}/search/repositories`;
   const repoData = [];
@@ -119,19 +135,12 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
       )}`;
       let data = {};
 
-      const { limit, remaining, reset } = await fetchRateLimit();
-      console.info(`API rate limit: ${remaining} remaining of ${limit} until ${new Date(reset * 1000)}`);
-
-      if (remaining < 12) {
-        while (Date.now() < new Date(reset * 1000)) {
-          console.log('Waiting for rate limit reset');
-        }
-      }
+      await waitForRateLimitReset(1);
 
       // Determine the optimal star range given 1000 returned results limit.
       console.info('1: Searching for optimal Star Range');
 
-      while (data.total_count > MAX_RESULTS_PER_SEARCH || data.total_count === undefined) {
+      do {
         console.info(`2: Trying Range ${starCountParsedRange}`);
         const queryParams = new URLSearchParams({
           q: `stars:${starCountParsedRange}`,
@@ -154,21 +163,21 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
         )}`;
 
         if (starCutoff === Math.max(Math.min(STAR_MAX, starCutoff + starCountRange - 1), starCutoff)) break;
-      }
+      } while (data.total_count > MAX_RESULTS_PER_SEARCH);
+
+      await waitForRateLimitReset(2);
 
       // Fetch all repositories with the given star count range.
-      if (data.total_count !== 0) {
-        const queryParams = new URLSearchParams({
-          q: `stars:${starCountParsedRange}`,
-          per_page: PER_PAGE.toString(),
-        });
+      const queryParams = new URLSearchParams({
+        q: `stars:${starCountParsedRange}`,
+        per_page: PER_PAGE.toString(),
+      });
 
-        const nextPageUrl = `${searchUrl}?${queryParams.toString()}`;
-        const fetchedRepos = await fetchRepositoriesWithPagination(nextPageUrl, fetchSettings);
+      const nextPageUrl = `${searchUrl}?${queryParams.toString()}`;
+      const fetchedRepos = await fetchRepositoriesWithPagination(nextPageUrl, fetchSettings);
 
-        repoData.push(...fetchedRepos);
-        console.info(`4: Adding ${fetchedRepos.length} repositories. Total stored: ${repoData.length}`);
-      }
+      repoData.push(...fetchedRepos);
+      console.info(`4: Adding ${fetchedRepos.length} repositories. Total stored: ${repoData.length}`);
 
       starCutoff += starCountRange;
 
@@ -177,6 +186,7 @@ async function fetchAllRepos(starCountStart = STAR_COUNT_START) {
       }
     }
 
+    repoData.sort((a, b) => b.stars - a.stars);
     return repoData;
   } catch (error) {
     console.error('Error fetching data:', error.message);
